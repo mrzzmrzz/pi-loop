@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import piLoopExtension from "../extensions/index.ts";
 import type { LoopRecord } from "../extensions/types.ts";
-import { LoopPanel, renderLoopWidget } from "../extensions/ui.ts";
+import {
+	hasSecondsCountdown,
+	LoopPanel,
+	renderLoopWidget,
+	truncatePlain,
+} from "../extensions/ui.ts";
 
 type Handler = (event: any, ctx: any) => any;
 
@@ -171,6 +177,38 @@ test("session state restores the same loop and stop writes a tombstone", async (
 		),
 	);
 	await harness.emit("session_shutdown", { reason: "quit" });
+});
+
+test("plain truncation emits no ANSI, so box backgrounds survive the ellipsis", () => {
+	const truncated = truncatePlain("检查部署状态并汇报所有新的失败用例", 10);
+	assert.ok(!truncated.includes("\x1b"));
+	assert.ok(truncated.endsWith("..."));
+	assert.ok(visibleWidth(truncated) <= 10);
+	assert.equal(truncatePlain("short", 10), "short");
+});
+
+test("seconds countdown is detected only inside the final minute", () => {
+	const now = Date.now();
+	const base: LoopRecord = {
+		id: "a",
+		prompt: "p",
+		usesDefaultPrompt: false,
+		mode: "fixed",
+		intervalMs: 60_000,
+		createdAt: now,
+		expiresAt: now + 60_000_000,
+		runCount: 0,
+		status: "waiting",
+		overdue: false,
+		awaitingDecision: false,
+		missedDecisions: 0,
+	};
+	assert.equal(hasSecondsCountdown([{ ...base, nextRunAt: now + 30_000 }], now), true);
+	assert.equal(hasSecondsCountdown([{ ...base, nextRunAt: now + 300_000 }], now), false);
+	assert.equal(
+		hasSecondsCountdown([{ ...base, status: "paused", nextRunAt: now + 30_000 }], now),
+		false,
+	);
 });
 
 test("Pi-themed widget and management panel render compact loop state", () => {

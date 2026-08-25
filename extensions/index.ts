@@ -8,7 +8,7 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Text, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
+import { Box, Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
 	formatRelativeTime,
@@ -27,7 +27,14 @@ import type {
 	LoopStateEntry,
 	LoopToolDetails,
 } from "./types.js";
-import { conciseLoopList, LoopPanel, loopSchedule, renderLoopWidget } from "./ui.js";
+import {
+	conciseLoopList,
+	hasSecondsCountdown,
+	LoopPanel,
+	loopSchedule,
+	renderLoopWidget,
+	truncatePlain,
+} from "./ui.js";
 
 const STATE_ENTRY = "pi-loop-state";
 const NOTICE_ENTRY = "pi-loop-notice";
@@ -144,28 +151,45 @@ export default function piLoopExtension(pi: ExtensionAPI) {
 		widgetTui = undefined;
 	};
 
+	const stopWidgetTicker = () => {
+		if (widgetTicker) clearTimeout(widgetTicker);
+		widgetTicker = undefined;
+	};
+
+	// The widget renders relative times on demand, so it only moves when
+	// something repaints. This ticker supplies the idle repaints: every 10s
+	// normally, every 1s while any countdown is inside its final minute, and
+	// not at all while no loops exist.
+	const scheduleWidgetTick = () => {
+		stopWidgetTicker();
+		widgetTicker = setTimeout(refreshWidget, hasSecondsCountdown(store.values()) ? 1_000 : 10_000);
+		widgetTicker.unref?.();
+	};
+
 	const refreshWidget = () => {
 		const ctx = ctxRef;
 		if (!ctx || ctx.mode !== "tui") return;
 		if (store.size === 0) {
 			forgetWidget();
+			stopWidgetTicker();
 			ctx.ui.setWidget(WIDGET_ID, undefined);
 			return;
 		}
 		if (widgetInstalled) {
 			widgetTui?.requestRender();
-			return;
+		} else {
+			// Install once; renders read live store state, and later changes only
+			// request a rerender instead of rebuilding the widget.
+			widgetInstalled = true;
+			ctx.ui.setWidget(WIDGET_ID, (tui, theme) => {
+				widgetTui = tui;
+				return {
+					render: (width: number) => renderLoopWidget(store.values(), width, theme),
+					invalidate: () => {},
+				};
+			});
 		}
-		// Install once; renders read live store state, and later changes only
-		// request a rerender instead of rebuilding the widget.
-		widgetInstalled = true;
-		ctx.ui.setWidget(WIDGET_ID, (tui, theme) => {
-			widgetTui = tui;
-			return {
-				render: (width: number) => renderLoopWidget(store.values(), width, theme),
-				invalidate: () => {},
-			};
-		});
+		scheduleWidgetTick();
 	};
 
 	const appendNotice = (loop: LoopRecord, kind: LoopNotice["kind"], reason: string) => {
@@ -575,14 +599,30 @@ export default function piLoopExtension(pi: ExtensionAPI) {
 		const details = message.details;
 		const box = new Box(outputPad, 1, (text) => theme.bg("customMessageBg", text));
 		if (!details) return box;
-		let text =
-			theme.fg("customMessageLabel", theme.bold("↻ Loop")) +
-			theme.fg("dim", `  ${details.schedule} · run ${details.runCount}`);
-		text += `\n${theme.fg("customMessageText", truncateToWidth(details.prompt || "Default maintenance prompt", 100))}`;
+		box.addChild(
+			new Text(
+				theme.fg("customMessageLabel", theme.bold("↻ Loop")) +
+					theme.fg("dim", `  ${details.schedule} · run ${details.runCount}`),
+				0,
+				0,
+			),
+		);
+		// Truncate at the actual render width, with truncatePlain so no SGR
+		// reset sneaks in and erases the box background after the ellipsis.
+		const prompt = details.prompt || "Default maintenance prompt";
+		box.addChild({
+			render: (width: number) => [theme.fg("customMessageText", truncatePlain(prompt, width))],
+			invalidate: () => {},
+		});
 		if (expanded) {
-			text += `\n${theme.fg("muted", `#${details.id} · expires ${formatRelativeTime(details.expiresAt)}`)}`;
+			box.addChild(
+				new Text(
+					theme.fg("muted", `#${details.id} · expires ${formatRelativeTime(details.expiresAt)}`),
+					0,
+					0,
+				),
+			);
 		}
-		box.addChild(new Text(text, 0, 0));
 		return box;
 	});
 
@@ -705,9 +745,6 @@ export default function piLoopExtension(pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		ctxRef = ctx;
 		reconstruct(ctx);
-		if (widgetTicker) clearInterval(widgetTicker);
-		widgetTicker = setInterval(refreshWidget, 10_000);
-		widgetTicker.unref?.();
 	});
 
 	pi.on("session_tree", (_event, ctx) => {
@@ -717,8 +754,7 @@ export default function piLoopExtension(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		store.reset();
-		if (widgetTicker) clearInterval(widgetTicker);
-		widgetTicker = undefined;
+		stopWidgetTicker();
 		if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_ID, undefined);
 		forgetWidget();
 		ctxRef = undefined;

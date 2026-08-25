@@ -16,6 +16,25 @@ function oneLine(text: string): string {
 	return text.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
 }
 
+const SGR_PATTERN = /\x1b\[[0-9;]*m/g;
+
+// pi-tui's truncateToWidth brackets its ellipsis with full SGR resets, which
+// erase an enclosing Box background from the ellipsis onward. For plain text
+// the injected codes are the only ANSI present, so stripping them yields a
+// width-correct result that is safe to colorize and nest inside backgrounds.
+export function truncatePlain(text: string, maxWidth: number): string {
+	return truncateToWidth(text, maxWidth).replace(SGR_PATTERN, "");
+}
+
+// formatDuration switches to a seconds label inside the final minute; tickers
+// match that granularity so the countdown visibly runs.
+export function hasSecondsCountdown(loops: LoopRecord[], now = Date.now()): boolean {
+	return loops.some(
+		(loop) =>
+			loop.status !== "paused" && loop.nextRunAt !== undefined && loop.nextRunAt - now < 60_000,
+	);
+}
+
 function promptLabel(loop: LoopRecord): string {
 	return loop.usesDefaultPrompt ? "Default maintenance prompt" : oneLine(loop.prompt);
 }
@@ -79,13 +98,21 @@ export class LoopPanel implements Focusable {
 	focused = false;
 	private selected = 0;
 	private confirmStop?: string;
-	private refreshTimer: NodeJS.Timeout;
+	private refreshTimer?: NodeJS.Timeout;
 
 	constructor(
 		private theme: Theme,
 		private actions: LoopPanelActions,
 	) {
-		this.refreshTimer = setInterval(() => this.actions.requestRender(), 5_000);
+		this.scheduleRefresh();
+	}
+
+	private scheduleRefresh(): void {
+		const delay = hasSecondsCountdown(this.actions.getLoops()) ? 1_000 : 5_000;
+		this.refreshTimer = setTimeout(() => {
+			this.actions.requestRender();
+			this.scheduleRefresh();
+		}, delay);
 		this.refreshTimer.unref?.();
 	}
 
@@ -219,7 +246,7 @@ export class LoopPanel implements Focusable {
 	invalidate(): void {}
 
 	dispose(): void {
-		clearInterval(this.refreshTimer);
+		if (this.refreshTimer) clearTimeout(this.refreshTimer);
 	}
 }
 
