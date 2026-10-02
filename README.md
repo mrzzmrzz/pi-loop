@@ -31,7 +31,7 @@ Or try it for a single run without installing:
 pi -e git:github.com/mrzzmrzz/pi-loop
 ```
 
-Requires Pi ≥ 0.84.
+Requires Pi ≥ 1.0.
 
 ## Usage
 
