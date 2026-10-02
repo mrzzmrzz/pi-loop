@@ -40,6 +40,7 @@ const STATE_ENTRY = "pi-loop-state";
 const NOTICE_ENTRY = "pi-loop-notice";
 const FIRE_MESSAGE = "pi-loop-fire";
 const WIDGET_ID = "pi-loop";
+const PROMPT_SECTION = "pi_loop";
 const LOOP_TTL_MS = 7 * 24 * 60 * 60_000;
 const ADAPTIVE_FALLBACK_MS = 20 * 60_000;
 const MAX_LOOPS = 50;
@@ -219,7 +220,7 @@ export default function piLoopExtension(pi: ExtensionAPI) {
 	};
 
 	const toolContract = (loop: LoopRecord): string => {
-		const common = `\n\nYou are running one bounded iteration of Pi Loop #${loop.id}. Do not wait, sleep, or poll inline. Use the current workspace state and earlier iteration results when available. If the standing instruction's completion condition is satisfied, call loop_control with action \"stop\" and id \"${loop.id}\" before finishing.`;
+		const common = `You are running one bounded iteration of Pi Loop #${loop.id}. Do not wait, sleep, or poll inline. Use the current workspace state and earlier iteration results when available. If the standing instruction's completion condition is satisfied, call loop_control with action \"stop\" and id \"${loop.id}\" before finishing.`;
 		if (loop.mode === "fixed") {
 			return `${common}\nIf more work remains, finish this iteration normally; the fixed scheduler will run it again.`;
 		}
@@ -706,10 +707,14 @@ export default function piLoopExtension(pi: ExtensionAPI) {
 		handler: async (_args, ctx) => showPanel(ctx),
 	});
 
+	// Add the contract as a named prompt section rather than returning a full
+	// systemPrompt override: Pi records section changes as transcript deltas, so
+	// loop iterations no longer rewrite the leading system prompt and invalidate
+	// the cached prefix. The section is absent on later runs, so Pi removes it.
 	pi.on("before_agent_start", (event) => {
 		const loop = activeFireId ? store.get(activeFireId) : undefined;
 		if (!loop) return;
-		return { systemPrompt: event.systemPrompt + toolContract(loop) };
+		event.systemPromptOptions.sections[PROMPT_SECTION] = toolContract(loop);
 	});
 
 	pi.on("agent_settled", (_event, ctx) => {

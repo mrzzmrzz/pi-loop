@@ -99,6 +99,25 @@ test("fixed slash loop fires immediately and settles without overlap", async () 
 	await harness.emit("session_shutdown", { reason: "quit" });
 });
 
+test("loop contract is added as a prompt section, not a full system prompt override", async () => {
+	const harness = createHarness();
+	await harness.emit("session_start", { reason: "startup" });
+	await harness.commands.get("loop").handler("check whether CI passed", harness.ctx);
+	const id = harness.latestLoop().id;
+
+	const startEvent = () => ({ systemPrompt: "base", systemPromptOptions: { sections: {} as Record<string, string> } });
+	const during = startEvent();
+	await harness.emit("before_agent_start", during);
+	assert.match(during.systemPromptOptions.sections.pi_loop!, new RegExp(`Pi Loop #${id}`));
+	assert.match(during.systemPromptOptions.sections.pi_loop!, /MUST call loop_control with action "snooze"/);
+
+	await harness.emit("agent_settled");
+	const after = startEvent();
+	await harness.emit("before_agent_start", after);
+	assert.deepEqual(after.systemPromptOptions.sections, {});
+	await harness.emit("session_shutdown", { reason: "quit" });
+});
+
 test("adaptive loop requires an explicit next delay and clamps it safely", async () => {
 	const harness = createHarness();
 	await harness.emit("session_start", { reason: "startup" });
